@@ -1,0 +1,100 @@
+name: Build EXE
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ['3.10']
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Display Python version
+      run: python -c "import sys; print(sys.version)"
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Verify repository files
+      run: |
+        Write-Host "=== Current Working Directory ==="
+        pwd
+        Write-Host "`n=== Listing all files in workspace ==="
+        Get-ChildItem -Recurse -Depth 1 | Select-Object Name, FullName | Format-Table
+        Write-Host "`n=== Checking for spec file ==="
+        if (Test-Path "WeightStation.spec") {
+          Write-Host "✓ WeightStation.spec found"
+          Get-Item "WeightStation.spec"
+        } else {
+          Write-Host "✗ WeightStation.spec NOT found"
+          Write-Host "Available .spec files:"
+          Get-ChildItem -Filter "*.spec" -ErrorAction SilentlyContinue
+        }
+    
+    - name: Initialize databases
+      run: |
+        python -c "from main import ensure_databases; ensure_databases()"
+    
+    - name: Verify database files
+      run: |
+        if (Test-Path "CustomerID.db") { Write-Host "✓ CustomerID.db found" } else { Write-Host "✗ CustomerID.db not found" }
+        if (Test-Path "ItemValue.db") { Write-Host "✓ ItemValue.db found" } else { Write-Host "✗ ItemValue.db not found" }
+        if (Test-Path "stockinhand.db") { Write-Host "✓ stockinhand.db found" } else { Write-Host "✗ stockinhand.db not found" }
+    
+    - name: Build EXE with PyInstaller
+      run: |
+        Write-Host "Starting PyInstaller build..."
+        pyinstaller WeightStation.spec
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "PyInstaller failed with exit code: $LASTEXITCODE"
+          exit 1
+        }
+    
+    - name: Verify EXE build
+      run: |
+        $exePath = ".\dist\WeightStation.exe"
+        if (Test-Path $exePath) {
+          Write-Host "✓ EXE file created successfully"
+          Get-Item $exePath | Select-Object FullName, Length
+        } else {
+          Write-Host "✗ EXE file not found at expected path: $exePath"
+          if (Test-Path ".\dist") {
+            Write-Host "dist folder contents:"
+            Get-ChildItem -Recurse .\dist
+          }
+          exit 1
+        }
+    
+    - name: Upload EXE artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: WeightStation-exe-${{ matrix.python-version }}
+        path: dist/WeightStation.exe
+        retention-days: 30
+        if-no-files-found: error
+    
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/WeightStation.exe
+        body: |
+          Automated EXE build for WeightStation
+          Python: ${{ matrix.python-version }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
